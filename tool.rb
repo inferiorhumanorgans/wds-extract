@@ -3,6 +3,7 @@
 require 'zip'
 require 'nokogiri'
 require 'optparse'
+require 'set'
 
 class ToolAction
   def self.run(options)
@@ -82,52 +83,71 @@ class ParseModel < ToolAction
   end
 
   def self.run(options)
-    xml_input = nil
+    options[:target_model].each do |target_model|
+      xml_input = nil
 
-    Zip::File.open(File.join(options[:wds_root], 'release', options[:wds_language], options[:target_model], 'tree', 'files.zip')) do |zipfile|
-      zipfile.each do |entry|
-        xml_input = entry.get_input_stream.read
-        break
+      Zip::File.open(File.join(options[:wds_root], 'release', options[:wds_language], target_model, 'tree', 'files.zip')) do |zipfile|
+        zipfile.each do |entry|
+          xml_input = entry.get_input_stream.read
+          break
+        end
       end
-    end
 
-    output_model_dir = File.join(options[:output_dir], options[:target_model])
-    Dir.mkdir(output_model_dir) unless Dir.exists? output_model_dir
+      output_model_dir = File.join(options[:output_dir], target_model)
+      Dir.mkdir(output_model_dir) unless Dir.exists? output_model_dir
 
-    File.open(File.join(options[:template_dir], 'tree.html')) do |html_in|
-      xml = Nokogiri::XML(xml_input, &:noblanks)
-      html = Nokogiri::HTML(html_in, &:noblanks)
+      File.open(File.join(options[:template_dir], 'tree.html')) do |html_in|
+        xml = Nokogiri::XML(xml_input, &:noblanks)
+        html = Nokogiri::HTML(html_in, &:noblanks)
 
-      tree = html.xpath('//div')[0]
+        tree = html.xpath('//div')[0]
 
-      STDERR.write 'Proccessing XML input: '
-      STDERR.flush
+        STDERR.write 'Proccessing XML input: '
+        STDERR.flush
 
-      xml.xpath('/tree').each{|t|
-        t.xpath('root').each{|r|
-          r.name='div'
-          r.remove_attribute('hidden')
-          ul = Nokogiri::XML::Node.new('ul', html)
-          tree << ul
+        xml.xpath('/tree').each{|t|
+          t.xpath('root').each{|r|
+            r.name='div'
+            r.remove_attribute('hidden')
+            ul = Nokogiri::XML::Node.new('ul', html)
+            tree << ul
 
-          folders = r.xpath('folder')
-          folders.each_with_index do |folder, index|
-            process_folder(folder, ul, html, "itm-#{index}")
-          end
-          ul << ('<li><input id="search-0" type="checkbox"><label for="search-0">Search Results</label><ul id="search-results"></ul></li>')
+            folders = r.xpath('folder')
+            folders.each_with_index do |folder, index|
+              process_folder(folder, ul, html, "itm-#{index}")
+            end
+            ul << ('<li><input id="search-0" type="checkbox"><label for="search-0">Search Results</label><ul id="search-results"></ul></li>')
+          }
         }
-      }
 
-      File.open(File.join(options[:output_dir], options[:target_model], 'index.html'), 'w+') do |html_out|
-        gz = Zlib::GzipWriter.new(html_out)
-        gz.write html.to_html(indent: 0)
-        gz.close
+        File.open(File.join(options[:output_dir], target_model, 'index.html'), 'w+') do |html_out|
+          gz = Zlib::GzipWriter.new(html_out)
+          gz.write html.to_html(indent: 0)
+          gz.close
+        end
+
+        STDERR.puts ' Done.'
       end
-
-      STDERR.puts ' Done.'
     end
   end
 end
+
+class SyncData < ToolAction
+  CMD = "upload"
+
+  def self.run(options)
+    STDERR.puts "Working on models: #{options[:target_model].to_a.sort.join(", ")}"
+
+    output = `cd work && aws s3 sync . s3://#{options[:s3_bucket]} --sse`
+    STDERR.puts output
+
+    options[:target_model].each do |target_model|
+      output = `aws s3api copy-object --content-encoding "gzip" --copy-source #{options[:s3_bucket]}/#{target_model}/index.html --key #{target_model}/index.html --metadata-directive REPLACE --bucket #{options[:s3_bucket]} --server-side-encryption AES256 --content-type text/html`
+      STDERR.puts output
+    end
+  end
+end
+
 
 options = {
   cmd:                ARGV[0],
@@ -136,7 +156,7 @@ options = {
   output_dir:         File.join(Dir.pwd, 'work'),
   template_dir:       File.join(Dir.pwd, 'templates'),
   asset_dir:          File.join(Dir.pwd, 'assets'),
-  target_model:       nil,
+  target_model:       Set.new,
   available_actions:  ObjectSpace.each_object(::Class).select {|klass| klass < ToolAction}.reduce({}) {|ret, inj| ret[inj.const_get(:CMD)] = inj; ret}
 }
 
@@ -148,7 +168,10 @@ OptionParser.new do |opts|
   end
 
   opts.on('-m', '--target-model MODEL', 'Model to extract information for') do |arg|
-    options[:target_model] = arg
+    options[:target_model].add(arg)
+  end
+  opts.on('-b', '--s3-bucket BUCKET', 'Bucket to store stuff in') do |arg|
+    options[:s3_bucket] = arg
   end
 end.parse!
 
