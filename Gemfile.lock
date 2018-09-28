@@ -1,10 +1,10 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    mini_portile2 (2.0.0)
-    nokogiri (1.6.7.2)
-      mini_portile2 (~> 2.0.0.rc2)
-    rubyzip (1.2.0)
+    mini_portile2 (2.3.0)
+    nokogiri (1.8.4)
+      mini_portile2 (~> 2.3.0)
+    rubyzip (1.2.2)
 
 PLATFORMS
   ruby
@@ -14,4 +14,4 @@ DEPENDENCIES
   rubyzip
 
 BUNDLED WITH
-   1.12.0
+   1.16.5
